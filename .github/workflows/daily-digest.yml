@@ -1,0 +1,126 @@
+name: Daily Digest
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate daily digest
+        run: |
+          python - <<'PY'
+import os, json, re
+from datetime import datetime, timezone, timedelta
+
+repo = "Synaptics-Lab/synapticchain-transcripts"
+today = datetime.now(timezone.utc)
+yesterday = today - timedelta(days=1)
+
+# List transcript files for yesterday
+date_prefix = yesterday.strftime("%Y-%m-%d")
+month_dir = yesterday.strftime("%Y-%m")
+
+transcripts_dir = f"transcripts/{month_dir}"
+digest_dir = "digests/daily"
+os.makedirs(digest_dir, exist_ok=True)
+
+digest_lines = [
+    f"# Daily Digest: {date_prefix}",
+    "",
+    f"Generated: {today.isoformat()}",
+    "",
+    "## Summary",
+    "",
+]
+
+# Count files
+transcript_files = []
+if os.path.isdir(transcripts_dir):
+    for f in sorted(os.listdir(transcripts_dir)):
+        if f.startswith(date_prefix):
+            transcript_files.append(f)
+
+digest_lines.append(f"- **Transcripts**: {len(transcript_files)} files")
+digest_lines.append("")
+
+if transcript_files:
+    digest_lines.append("## Files")
+    digest_lines.append("")
+    for f in transcript_files:
+        digest_lines.append(f"- [{f}](../../{transcripts_dir}/{f})")
+    digest_lines.append("")
+
+    digest_lines.append("## Highlights")
+    digest_lines.append("")
+    for f in transcript_files:
+        path = os.path.join(transcripts_dir, f)
+        with open(path) as fh:
+            content = fh.read()
+        # Extract first 10 lines as preview
+        lines = content.splitlines()[:10]
+        digest_lines.append(f"### {f}")
+        digest_lines.append("```")
+        digest_lines.extend(lines)
+        digest_lines.append("```")
+        digest_lines.append("")
+else:
+    digest_lines.append("No transcripts found for this day.")
+    digest_lines.append("")
+
+digest_path = f"{digest_dir}/{date_prefix}.md"
+with open(digest_path, "w") as fh:
+    fh.write("\n".join(digest_lines))
+
+print(f"Wrote {digest_path}")
+
+# Weekly digest on Sundays
+if today.weekday() == 6:  # Sunday
+    week_num = today.isocalendar()[1]
+    week_path = f"digests/weekly/{today.strftime('%Y')}-W{week_num:02d}.md"
+    # Collect last 7 days
+    week_lines = [
+        f"# Weekly Digest: Week {week_num}",
+        "",
+        f"Generated: {today.isoformat()}",
+        "",
+    ]
+    for i in range(7):
+        day = today - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        day_file = f"digests/daily/{day_str}.md"
+        if os.path.exists(day_file):
+            with open(day_file) as fh:
+                week_lines.append(f"## {day_str}")
+                week_lines.append("")
+                # Include summary section only
+                content = fh.read()
+                summary_match = re.search(r'## Summary(.*?)##', content, re.DOTALL)
+                if summary_match:
+                    week_lines.append(summary_match.group(1).strip())
+                else:
+                    week_lines.append("(see daily digest)")
+                week_lines.append("")
+    with open(week_path, "w") as fh:
+        fh.write("\n".join(week_lines))
+    print(f"Wrote {week_path}")
+PY
+
+      - name: Commit and push
+        run: |
+          git config user.name "Transcript Bot"
+          git config user.email "bot@synapticchain.net"
+          git add digests/
+          git diff --cached --quiet || git commit -m "Daily digest for $(date -u +%Y-%m-%d)"
+          git push
